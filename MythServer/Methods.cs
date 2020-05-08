@@ -5,6 +5,10 @@ using System.Text;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization.Attributes;
 using MongoDB.Driver;
+using System.Net;
+using System.Linq;
+using Newtonsoft.Json;
+using CoreExtensions;
 
 namespace MythServer
 {
@@ -18,10 +22,20 @@ namespace MythServer
 
             Player player = new Player
             { connection = conn };
+            player.udpIPEndPoint = (IPEndPoint)conn.Client.RemoteEndPoint;
             players.Add(player);
             return player;
 
         }
+
+        public Player GetPlayerByID(string ID)
+        {
+
+            return players.Find(p => p.id == ID);
+
+        }
+
+        #region PlayerRequests
 
         public void GET_DATA(Player player, Dictionary<string, string> payload)
         {
@@ -46,6 +60,40 @@ namespace MythServer
             Server.db.UpdatePlayer(filter, update);
 
         }
+
+        public void IAM_ALIVE(Player player, Dictionary<string, string> payload)
+        {
+
+            Console.WriteLine("Player sent a pulse! Player ID is: " + player.id);
+
+        }
+
+        public void UDPPULSE(Player player, Dictionary<string, string> payload)
+        {
+
+            Console.WriteLine("Player " + player.id + " updated his UDP port to: " + player.udpIPEndPoint.Port);
+
+            Server.SendMessageUDP(player, R_HEY());
+
+        }
+
+        #endregion
+
+
+        #region ServerResponses
+
+        public static string R_HEY()
+        {
+
+            Dictionary<string, string> toConvert = new Dictionary<string, string>();
+
+            toConvert.Add("type", "heylol");
+            
+            return toConvert.ToJson();
+
+        }
+
+        #endregion
 
     }
 
@@ -93,7 +141,7 @@ namespace MythServer
             return collection.Find<PlayerDB>(filter).Any();
 
         }
-
+        
     }
 
     class PlayerDB
@@ -122,7 +170,7 @@ namespace MythServer
         public string id;
         public bool loaded = false, online = true;
         public TcpClient connection;
-        public int udpPort = 4467;
+        public IPEndPoint udpIPEndPoint;
 
     }
 

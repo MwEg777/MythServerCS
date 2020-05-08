@@ -1,5 +1,4 @@
-﻿using Eto.Forms;
-using MythServer;
+﻿using MythServer;
 using System;
 using System.Threading;
 using static MythServer.Server;
@@ -13,7 +12,7 @@ class Program
 
         Thread t = new Thread(delegate ()
         {
-            Server myserver = new Server("192.168.1.2", 4466);
+            Server myserver = new Server("0.0.0.0", 4466);
         });
 
         t.Start();

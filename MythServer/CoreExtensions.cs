@@ -6,12 +6,19 @@ using System.Net.NetworkInformation;
 using System.Security.Cryptography;
 using System.IO;
 using System.Linq;
+using Newtonsoft.Json;
 
 namespace CoreExtensions
 { 
 public static class CoreExtensions
 {
 
+    public static string ToJson(this Dictionary<string, string> dict)
+    {
+
+        return JsonConvert.SerializeObject(dict) + "$eof$";
+
+    }
     public static T GetDefault<T>(this Dictionary<string, T> instance, string key, T val = default(T))
     {
         if (instance.ContainsKey(key))

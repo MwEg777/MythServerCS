@@ -5,8 +5,6 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Threading;
-using Eto.Forms;
-using Eto.Drawing;
 using System.Reflection;
 using System.Linq;
 
@@ -16,7 +14,7 @@ namespace MythServer
     {
 
         Methods methods = new Methods();
-
+        static UdpClient udp;
         TcpListener server = null;
 
         public static MongoCRUD db;
@@ -29,31 +27,33 @@ namespace MythServer
             IPAddress localAddr = IPAddress.Parse(ip);
             server = new TcpListener(localAddr, port);
             server.Start();
+            Thread udpThread = new Thread(UDPThread);
+            udpThread.Start();
             StartListener();
 
         }
-        public class MythForm : Form
-        {
-            public MythForm()
-            {
+        // public class MythForm : Form
+        // {
+        //     public MythForm()
+        //     {
 
-                var layout = new PixelLayout();
+        //         var layout = new PixelLayout();
 
-                Label playersTitle = new Label { Text = "Players" };
-                playersTitle.Font = new Font(FontFamilies.Sans, 15);
-                layout.Add(playersTitle, 10, 10);
+        //         Label playersTitle = new Label { Text = "Players" };
+        //         playersTitle.Font = new Font(FontFamilies.Sans, 15);
+        //         layout.Add(playersTitle, 10, 10);
 
-                ListBox playersList = new ListBox();
-                playersList.Size = new Size(300, 300);
-                layout.Add(playersList, 10, 50);
+        //         ListBox playersList = new ListBox();
+        //         playersList.Size = new Size(300, 300);
+        //         layout.Add(playersList, 10, 50);
 
-                Content = layout;
+        //         Content = layout;
 
-                Size = new Size(1000, 500);
+        //         Size = new Size(1000, 500);
 
-            }
+        //     }
 
-        }
+        // }
         public void StartListener()
         {
 
@@ -91,8 +91,7 @@ namespace MythServer
 
             Queue<Dictionary<string, string>> clientRequestsQueue = new Queue<Dictionary<string, string>>();
 
-            Thread udpThread = new Thread(new ParameterizedThreadStart(PlayerUDPThread));
-            udpThread.Start(player);
+
 
             try
             {
@@ -223,29 +222,27 @@ namespace MythServer
             }
         
         }
-        public void PlayerUDPThread(Object playerObject)
+        public void UDPThread()
         {
 
             try
             {
 
-                UdpClient udp = new UdpClient(4468);
+                udp = new UdpClient(4467);
 
                 Byte[] bytes = new byte[1024];
                 string data = "";
 
-                Console.WriteLine("Started listening to UDP client requests ...");
-
-                Player player = playerObject as Player;
-
-                IPEndPoint playerIP = player.connection.Client.RemoteEndPoint as IPEndPoint;
+                Console.WriteLine("Started listening to UDP requests ...");
 
                 Queue<Dictionary<string, string>> clientRequestsQueue = new Queue<Dictionary<string, string>>();
 
-                while (player.online)
+                IPEndPoint udpRecvEndpoint = new IPEndPoint(IPAddress.Any, 4467);
+
+                while (true)
                 {
 
-                    bytes = udp.Receive(ref playerIP);
+                    bytes = udp.Receive(ref udpRecvEndpoint);
                     string serverMessage = Encoding.ASCII.GetString(bytes);
 
                     try
@@ -256,9 +253,12 @@ namespace MythServer
 
                         Console.WriteLine("Parsing UDP client response..");
                         string[] messages = data.Split(new string[] { "$eof$" }, StringSplitOptions.None);
+                        //Console.WriteLine("Client UDP Connection info: IP is " + udpRecvEndpoint.Address + ", port is: " + udpRecvEndpoint.Port);
 
                         foreach (string message in messages)
                         {
+
+                            //Console.WriteLine("Processing UDP message " + message);
 
                             try
                             {
@@ -289,13 +289,25 @@ namespace MythServer
                             foreach (Dictionary<string, string> request in requests)
                                 try
                                 {
-                                    ProcessClientMessage(player, clientRequestsQueue.Dequeue());
+                                    
+                                    Dictionary<string, string> dictToDequeue = clientRequestsQueue.Dequeue();
+
+                                    Console.WriteLine("Dequeuing dict with following values: ");
+                                    foreach(KeyValuePair<string, string> kvp in dictToDequeue)
+                                        Console.WriteLine("Key is: " + kvp.Key + " , value is: " + kvp.Value);
+
+
+                                    Player player = methods.GetPlayerByID(request["playerid"]);
+                                    player.udpIPEndPoint.Port = udpRecvEndpoint.Port;
+                                    ProcessClientMessage(player, dictToDequeue);
                                 }
                                 catch (Exception exo)
                                 {
 
                                     try
                                     {
+
+                                        clientRequestsQueue.Dequeue(); //Delete corrupt/invalid request
 
                                         Console.WriteLine("Problem processing a client message or dequeuing message. \n" +
                                             "request: " + request["type"].ToString() + " \n" +
@@ -344,6 +356,15 @@ namespace MythServer
             Type thisType = methods.GetType();
             MethodInfo theMethod = thisType.GetMethod(clientMessage["type"]);
             theMethod.Invoke(methods, new object[] { player, clientMessage });
+
+        }
+
+        public static void SendMessageUDP(Player player, string message)
+        {
+
+            byte[] messageAsByteArray = Encoding.ASCII.GetBytes(message);
+
+            udp.Send(messageAsByteArray, messageAsByteArray.Length, player.udpIPEndPoint);
 
         }
 
