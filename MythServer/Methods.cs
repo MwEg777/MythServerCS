@@ -31,6 +31,11 @@ namespace MythServer
         public Player GetPlayerByID(string ID)
         {
 
+            Console.WriteLine("Players in list are: ");
+
+            foreach(Player player in players)
+                Console.WriteLine("Player id: " + player.id);
+
             return players.Find(p => p.id == ID);
 
         }
@@ -68,7 +73,7 @@ namespace MythServer
 
         }
 
-        public void UDPPULSE(Player player, Dictionary<string, string> payload)
+        public void UDP_PULSE(Player player, Dictionary<string, string> payload)
         {
 
             Console.WriteLine("Player " + player.id + " updated his UDP port to: " + player.udpIPEndPoint.Port);
