@@ -32,28 +32,7 @@ namespace MythServer
             StartListener();
 
         }
-        // public class MythForm : Form
-        // {
-        //     public MythForm()
-        //     {
 
-        //         var layout = new PixelLayout();
-
-        //         Label playersTitle = new Label { Text = "Players" };
-        //         playersTitle.Font = new Font(FontFamilies.Sans, 15);
-        //         layout.Add(playersTitle, 10, 10);
-
-        //         ListBox playersList = new ListBox();
-        //         playersList.Size = new Size(300, 300);
-        //         layout.Add(playersList, 10, 50);
-
-        //         Content = layout;
-
-        //         Size = new Size(1000, 500);
-
-        //     }
-
-        // }
         public void StartListener()
         {
 
@@ -89,9 +68,7 @@ namespace MythServer
             string buffer = "";
             Player player = methods.AddPlayer(client);
 
-            Queue<Dictionary<string, string>> clientRequestsQueue = new Queue<Dictionary<string, string>>();
-
-
+            Queue<Dictionary<string, object>> clientRequestsQueue = new Queue<Dictionary<string, object>>();
 
             try
             {
@@ -119,7 +96,7 @@ namespace MythServer
                                 if (string.IsNullOrEmpty(message)) //Skip empty messages
                                     continue;
 
-                                Dictionary<string, string> clientMessageDict = JsonConvert.DeserializeObject<Dictionary<string, string>>(message);
+                                Dictionary<string, object> clientMessageDict = JsonConvert.DeserializeObject<Dictionary<string, object>>(message);
                                 if (clientMessageDict.ContainsKey("type"))
                                     clientRequestsQueue.Enqueue(clientMessageDict);
                                 else
@@ -146,7 +123,7 @@ namespace MythServer
                                             if (string.IsNullOrEmpty(msg)) //Skip empty messages
                                                 continue;
 
-                                            Dictionary<string, string> clientMessageDict = JsonConvert.DeserializeObject<Dictionary<string, string>>(msg);
+                                            Dictionary<string, object> clientMessageDict = JsonConvert.DeserializeObject<Dictionary<string, object>>(msg);
                                             if (clientMessageDict.ContainsKey("type"))
                                                 clientRequestsQueue.Enqueue(clientMessageDict);
                                             else
@@ -167,12 +144,12 @@ namespace MythServer
                             }
                         }
 
-                        Queue<Dictionary<string, string>> requests = new Queue<Dictionary<string, string>>(clientRequestsQueue);
+                        Queue<Dictionary<string, object>> requests = new Queue<Dictionary<string, object>>(clientRequestsQueue);
 
                         while (clientRequestsQueue.Count > 0)
                         {
 
-                            foreach (Dictionary<string, string> request in requests)
+                            foreach (Dictionary<string, object> request in requests)
                                 try
                                 {
                                     ProcessClientMessage(player, clientRequestsQueue.Dequeue());
@@ -235,7 +212,7 @@ namespace MythServer
 
                 Console.WriteLine("Started listening to UDP requests ...");
 
-                Queue<Dictionary<string, string>> clientRequestsQueue = new Queue<Dictionary<string, string>>();
+                Queue<Dictionary<string, object>> clientRequestsQueue = new Queue<Dictionary<string, object>>();
 
                 IPEndPoint udpRecvEndpoint = new IPEndPoint(IPAddress.Any, 4467);
 
@@ -266,7 +243,7 @@ namespace MythServer
                                 if (string.IsNullOrEmpty(message)) //Skip empty messages
                                     continue;
 
-                                Dictionary<string, string> clientMessageDict = JsonConvert.DeserializeObject<Dictionary<string, string>>(message);
+                                Dictionary<string, object> clientMessageDict = JsonConvert.DeserializeObject<Dictionary<string, object>>(message);
                                 if (clientMessageDict.ContainsKey("type"))
                                     clientRequestsQueue.Enqueue(clientMessageDict);
                                 else
@@ -281,23 +258,22 @@ namespace MythServer
                             }
                         }
 
-                        Queue<Dictionary<string, string>> requests = new Queue<Dictionary<string, string>>(clientRequestsQueue);
+                        Queue<Dictionary<string, object>> requests = new Queue<Dictionary<string, object>>(clientRequestsQueue);
 
                         while (clientRequestsQueue.Count > 0)
                         {
 
-                            foreach (Dictionary<string, string> request in requests)
+                            foreach (Dictionary<string, object> request in requests)
                                 try
                                 {
                                     
-                                    Dictionary<string, string> dictToDequeue = clientRequestsQueue.Dequeue();
+                                    Dictionary<string, object> dictToDequeue = clientRequestsQueue.Dequeue();
 
                                     Console.WriteLine("Dequeuing dict with following values: ");
-                                    foreach(KeyValuePair<string, string> kvp in dictToDequeue)
+                                    foreach(KeyValuePair<string, object> kvp in dictToDequeue)
                                         Console.WriteLine("Key is: " + kvp.Key + " , value is: " + kvp.Value);
 
-
-                                    Player player = methods.GetPlayerByID(request["playerid"]);
+                                    Player player = methods.GetPlayerByID(request["playerid"].ToString());
                                     player.udpIPEndPoint.Port = udpRecvEndpoint.Port;
                                     ProcessClientMessage(player, dictToDequeue);
                                 }
@@ -348,14 +324,16 @@ namespace MythServer
 
         }
 
-        public void ProcessClientMessage(Player player, Dictionary<string, string> clientMessage)
+        public void ProcessClientMessage(Player player, Dictionary<string, object> clientMessage)
         {
 
             Console.WriteLine("Processing client message with type " + clientMessage["type"]);
 
             Type thisType = methods.GetType();
-            MethodInfo theMethod = thisType.GetMethod(clientMessage["type"]);
+            MethodInfo theMethod = thisType.GetMethod(clientMessage["type"].ToString());
             theMethod.Invoke(methods, new object[] { player, clientMessage });
+
+            player.secondsSinceLastValidMessage = Methods.secondsSinceStartUp;
 
         }
 
@@ -365,6 +343,33 @@ namespace MythServer
             byte[] messageAsByteArray = Encoding.ASCII.GetBytes(message);
 
             udp.Send(messageAsByteArray, messageAsByteArray.Length, player.udpIPEndPoint);
+
+        }
+
+        public static void SendMessageTCP(Player player, string message)
+        {
+
+            try
+            {
+                // Get a stream object for writing. 			
+                NetworkStream stream = player.connection.GetStream();
+                if (stream.CanWrite)
+                {
+                    // Convert string message to byte array.                 
+                    byte[] clientMessageAsByteArray = Encoding.ASCII.GetBytes(message);
+                    // Write byte array to socketConnection stream.                 
+                    stream.Write(clientMessageAsByteArray, 0, clientMessageAsByteArray.Length);
+                    //Debug.Log("Sending the following to server: " + msgToSend);
+                }
+            }
+            catch (SocketException socketException)
+            {
+                Console.WriteLine("Socket exception: " + socketException);
+            }
+            catch(Exception ex)
+            {
+                Console.WriteLine("SendMessageTCP Exception: " + ex);
+            }
 
         }
 

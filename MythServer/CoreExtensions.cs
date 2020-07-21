@@ -13,7 +13,7 @@ namespace CoreExtensions
 public static class CoreExtensions
 {
 
-    public static string ToJson(this Dictionary<string, string> dict)
+    public static string ToJson(this Dictionary<string, object> dict)
     {
 
         return JsonConvert.SerializeObject(dict) + "$eof$";

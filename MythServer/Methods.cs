@@ -9,6 +9,8 @@ using System.Net;
 using System.Linq;
 using Newtonsoft.Json;
 using CoreExtensions;
+using System.Threading.Tasks;
+using System.Threading;
 
 namespace MythServer
 {
@@ -16,6 +18,88 @@ namespace MythServer
     {
 
         public List<Player> players = new List<Player>();
+        public List<Room> rooms = new List<Room>();
+
+        public static Methods instance;
+
+        public static int secondsSinceStartUp = 0,
+            playerTimeoutMax = 5;
+
+        public Methods()
+        {
+
+            instance = this;
+            Thread playersTimeoutCheckerThread = new Thread(PlayersTimeoutChecker);
+            playersTimeoutCheckerThread.Start();
+
+        }
+
+        async void PlayersTimeoutChecker() 
+        { 
+
+	        while(true)
+            {
+
+                await Task.Delay(1000);
+
+                secondsSinceStartUp++;
+
+                try
+                {
+
+                    List<Player> playersToRemove = new List<Player>();
+
+                    foreach(Player player in players)
+                    {
+
+                        //Console.WriteLine("Looping over player " + player.name + ". Time now is: " + secondsSinceStartUp + " and player time is: " + player.secondsSinceLastValidMessage);
+
+                        if (secondsSinceStartUp - player.secondsSinceLastValidMessage > playerTimeoutMax || secondsSinceStartUp - player.secondsSinceLastValidMessage < - playerTimeoutMax)
+                        {
+
+                            try
+                            {
+
+                                try
+                                {
+                                    player.connection.Close();
+                                    Console.WriteLine("Player " + player.name + " timed out. Disconnecting..");
+                                    player.online = false;
+                                    if (player.room != null)
+                                    {
+                                        Console.WriteLine("The disconnected player was in room " + player.room.id + ", removing him from it first.");
+                                        player.room.RemovePlayerFromRoom(player);
+                                    }
+                                    playersToRemove.Add(player);
+                                    Console.WriteLine("Player " + player.name + " disconnected.");
+                                }
+                                catch(Exception eClose)
+                                {
+                                    Console.WriteLine("Couldn't close connection with player " + player.name + ". " + eClose);
+                                }
+
+                            }
+                            catch(Exception ex)
+                            {
+                                Console.WriteLine("Couldn't disconnect player and remove him. " + ex);
+                            }
+
+                        }
+
+                    }
+
+                    foreach (Player player in playersToRemove)
+                        players.Remove(player);
+
+                }
+                catch(Exception e)
+                {
+                    Console.WriteLine("No IDEAR why an error happened here. " + e);
+                }
+
+            }
+
+        }
 
         public Player AddPlayer(TcpClient conn)
         {
@@ -34,19 +118,82 @@ namespace MythServer
             Console.WriteLine("Players in list are: ");
 
             foreach(Player player in players)
-                Console.WriteLine("Player id: " + player.id);
+                Console.WriteLine("Player id: " + player.name);
 
             return players.Find(p => p.id == ID);
 
         }
 
+        public Room CreateNewRoom()
+        {
+
+            Room room = new Room();
+            room.id = Guid.NewGuid().ToString();
+            room.roomState = Room.State.Matchmaking;
+            rooms.Add(room);
+            return room;
+
+        }
+
         #region PlayerRequests
 
-        public void GET_DATA(Player player, Dictionary<string, string> payload)
+        public void WHOAMI(Player player, Dictionary<string, object> payload)
+        {
+
+            player.id = payload["id"].ToString();
+            player.name = payload["name"].ToString();
+            player.online = true;
+
+        }
+
+        public void UPDATE_INDICATOR(Player player, Dictionary<string, object> payload)
+        {
+
+            player.room.BroadcastInRoom(JsonConvert.SerializeObject(payload));
+
+        }
+
+        public void FIRE_BULLET(Player player, Dictionary<string, object> payload)
+        {
+
+            Console.WriteLine("Player " + player.name + " Is firing a bullet. Grant state: " + player.room.FireBullet(payload["firevector"].ToString()));
+
+        }
+
+        public void START_MATCHMAKING(Player player, Dictionary<string, object> payload)
+        {
+
+            Room firstSuitableRoom = null;
+
+            foreach (Room room in rooms)
+                if (!room.isFull() && room.roomState == Room.State.Matchmaking)
+                {
+                    firstSuitableRoom = room;
+                    break;
+                }
+
+            if (firstSuitableRoom == null)
+                firstSuitableRoom = CreateNewRoom();
+
+            firstSuitableRoom.AddPlayerToRoom(player);
+
+        }
+
+        public void CANCEL_MATCHMAKING(Player player, Dictionary<string, object> payload)
+        {
+
+            if (player.room == null)
+                return;
+
+            player.room.RemovePlayerFromRoom(player);
+
+        }
+
+        public void GET_DATA(Player player, Dictionary<string, object> payload)
         {
 
             Console.WriteLine("Payload type name: " + payload["type"]);
-            player.id = payload["id"];
+            player.id = payload["id"].ToString();
 
             var filter = Builders<PlayerDB>.Filter.Eq("id", player.id);
 
@@ -54,7 +201,7 @@ namespace MythServer
                 Server.db.InsertPlayer("Users", new PlayerDB
                 {
 
-                    name = payload["name"],
+                    name = payload["name"].ToString(),
                     id = player.id
 
                 });
@@ -66,17 +213,31 @@ namespace MythServer
 
         }
 
-        public void IAM_ALIVE(Player player, Dictionary<string, string> payload)
+        public void IAM_ALIVE(Player player, Dictionary<string, object> payload)
         {
 
-            Console.WriteLine("Player sent a pulse! Player ID is: " + player.id);
+            //Console.WriteLine("Player sent a pulse! Player ID is: " + player.name);
 
         }
 
-        public void UDP_PULSE(Player player, Dictionary<string, string> payload)
+        public void PLACE_GUARD(Player player, Dictionary<string, object> payload)
         {
 
-            Console.WriteLine("Player " + player.id + " updated his UDP port to: " + player.udpIPEndPoint.Port);
+            Console.WriteLine("Player " + player.name + " Is placing a guard. Grant state: " + player.room.PlaceGuard(payload["guardpos"].ToString()));
+
+        }
+
+        public void REQUEST_BULLET(Player player, Dictionary<string, object> payload)
+        {
+
+            Console.WriteLine("Player " + player.name + " requested a bullet. Grant state: " + player.room.GiveBullet());
+
+        }
+
+        public void UDP_PULSE(Player player, Dictionary<string, object> payload)
+        {
+
+            Console.WriteLine("Player " + player.name + " updated his UDP port to: " + player.udpIPEndPoint.Port);
 
             Server.SendMessageUDP(player, R_HEY());
 
@@ -90,10 +251,97 @@ namespace MythServer
         public static string R_HEY()
         {
 
-            Dictionary<string, string> toConvert = new Dictionary<string, string>();
+            Dictionary<string, object> toConvert = new Dictionary<string, object>();
 
             toConvert.Add("type", "heylol");
             
+            return toConvert.ToJson();
+
+        }
+
+        public static string R_LOGMESSAGE(string message)
+        {
+
+            Dictionary<string, object> toConvert = new Dictionary<string, object>();
+
+            toConvert.Add("type", "logmessage");
+            toConvert.Add("message", message);
+
+            return toConvert.ToJson();
+
+        }
+
+        public static string R_SETROLE(Room.TurnOwner role)
+        {
+
+            Dictionary<string, object> toConvert = new Dictionary<string, object>();
+
+            toConvert.Add("type", "SET_ROLE");
+            toConvert.Add("role", role);
+
+            return toConvert.ToJson();
+
+        }
+
+        public static string R_STARTGAME(Room room)
+        {
+
+            Dictionary<string, object> toConvert = new Dictionary<string, object>();
+
+            toConvert.Add("type", "START_GAME");
+            for (int i=0; i<room.players.Count; i++)
+                toConvert.Add("opponentinfo" + i.ToString(), new OpponentInfo { name = room.players[i].name , id = room.players[i].id });
+
+            foreach (KeyValuePair<Room.TurnOwner, Player> kvp in room.roles)
+                Server.SendMessageTCP(kvp.Value, R_SETROLE(kvp.Key));
+
+            return toConvert.ToJson();
+
+        }
+
+        public static string R_PLACEGUARD(string guardPos)
+        {
+
+            Dictionary<string, object> toConvert = new Dictionary<string, object>();
+
+            toConvert.Add("type", "PLACE_GUARD");
+            toConvert.Add("guardpos", guardPos);
+
+            return toConvert.ToJson();
+
+        }
+
+        public static string R_FIREBULLET(string fireVector)
+        {
+
+            Dictionary<string, object> toConvert = new Dictionary<string, object>();
+
+            toConvert.Add("type", "FIRE_BULLET");
+            toConvert.Add("firevector", fireVector);
+
+            return toConvert.ToJson();
+
+        }
+
+        public static string R_PLACEBULLET()
+        {
+
+            Dictionary<string, object> toConvert = new Dictionary<string, object>();
+
+            toConvert.Add("type", "PLACE_BULLET");
+
+            return toConvert.ToJson();
+
+        }
+
+        public static string R_SWITCHTURN(Room.TurnOwner turnOwner)
+        {
+
+            Dictionary<string, object> toConvert = new Dictionary<string, object>();
+
+            toConvert.Add("type", "SWITCH_TURN");
+            toConvert.Add("turn", turnOwner);
+
             return toConvert.ToJson();
 
         }
@@ -169,13 +417,326 @@ namespace MythServer
 
     }
 
+    class OpponentInfo
+    {
+
+        public string name, id;
+
+    }
+
     class Player
     {
 
-        public string id;
-        public bool loaded = false, online = true;
+        #region Essentials
+
+        public string id = "no_id", name = "no_name";
+        public bool loaded = false, online = false;
         public TcpClient connection;
         public IPEndPoint udpIPEndPoint;
+        public Room room;
+        public long secondsSinceLastValidMessage = Methods.secondsSinceStartUp;
+
+        #endregion
+
+        #region GameSpecificStuff
+
+
+
+        #endregion
+
+    }
+
+    class Room
+    {
+
+        #region Essentials
+
+        public string id;
+        public enum State { Matchmaking, Ongoing, Ended };
+        public State roomState = State.Matchmaking;
+        public List<Player> players = new List<Player>();
+        public int maxPlayers = 1;
+
+        #endregion
+
+        #region GameSpecificStuff
+
+        public int guardsLeft = 16, maxGuards = 16, bulletsLeft = 3, maxBullets = 3;
+        public enum TurnOwner { Attacker, Defender };
+
+        public TurnOwner turn = TurnOwner.Defender;
+
+        public Dictionary<TurnOwner, Player> roles = new Dictionary<TurnOwner, Player>();
+        public bool aBulletIsOut = false;
+
+        #endregion
+
+        public void AssignRoles()
+        {
+
+            //Assign first player as defender, second as attacker.
+            //Random. Based on who connects first.
+            roles.Add(TurnOwner.Defender, players[0]);
+            roles.Add(TurnOwner.Attacker, players[1]);
+
+        }
+
+        public bool PlaceGuard(string guardPositionJson)
+        {
+
+            if (turn != TurnOwner.Defender)
+                return false;
+
+            if (guardsLeft > 0)
+            {
+
+                //Broadcast guard position to all players
+                BroadcastInRoom(Methods.R_PLACEGUARD(guardPositionJson));
+
+                guardsLeft--;
+
+                if (guardsLeft <= 0)
+                {
+
+                    guardsLeft = 0;
+                    GiveTurnTo(TurnOwner.Attacker);
+
+                }
+
+                return true;
+            }
+            else
+                return false;
+
+        }
+
+        public bool FireBullet(string fireVector)
+        {
+
+            Console.WriteLine("Trying to fire a bullet in room. bullets left: " + bulletsLeft + " , turn: " + turn.ToString());
+
+            if (turn != TurnOwner.Attacker)
+                return false;
+
+            if (!aBulletIsOut)
+            {
+
+                BroadcastInRoom(Methods.R_FIREBULLET(fireVector));
+
+                aBulletIsOut = true;
+
+                return true;
+            }
+            else
+                return false;
+
+        }
+
+        public bool GiveBullet()
+        {
+
+            if (bulletsLeft > 0)
+            {
+
+                aBulletIsOut = false;
+
+                BroadcastInRoom(Methods.R_PLACEBULLET());
+                bulletsLeft--;
+
+                return true;
+
+            }
+
+            return false;
+
+        }
+
+        public void GiveTurnTo(TurnOwner newTurnOwner)
+        {
+
+            turn = newTurnOwner;
+
+            if (turn == TurnOwner.Defender)
+                guardsLeft = maxGuards;
+            else
+            {
+                bulletsLeft = maxBullets;
+            }
+
+            BroadcastInRoom(Methods.R_SWITCHTURN(newTurnOwner));
+
+        }
+
+        public bool isFull()
+        {
+
+            return players.Count == maxPlayers;
+
+        }
+
+        public bool AddPlayerToRoom(Player player)
+        {
+            
+            if (isFull())
+            {
+
+                Console.WriteLine("Player " + player.name + " tried to join room " + id + " but it's full.");
+                return false;
+
+            }
+            else
+            {
+
+                foreach(Room room in Methods.instance.rooms) //Remove player from any other room he's in
+                {
+
+                    foreach(Player p in room.players)
+                    {
+                        if (p.id == player.id)
+                        {
+
+                            Console.WriteLine("Player " + p.name + " was found in another room! Removing him from it..");
+                            RemovePlayerFromRoom(player);
+
+                        }
+                    }
+
+                }
+
+                players.Add(player);
+                Console.WriteLine("Player " + player.name + " joined room " + id);
+                Server.SendMessageTCP(player, Methods.R_LOGMESSAGE("You just joined room " + id));
+                player.room = this;
+                player.loaded = false;
+
+                //Check if room is ready to start the match
+                if (isFull())
+                {
+
+                    Console.WriteLine("Room " + id + "\nis now ready to start the match!");
+                    StartMatch();
+
+                }
+
+                PrintRoomInfo();
+
+                return true;
+
+            }
+
+
+        }
+
+        public void StartMatch()
+        {
+
+            Console.WriteLine("Room " + id + "\n match started!");
+            roomState = State.Ongoing;
+            BroadcastInRoom(Methods.R_STARTGAME(this));
+            GiveTurnTo(TurnOwner.Defender);
+
+        }
+
+        public void RestartMatch()
+        {
+
+            Console.WriteLine("Room " + id + "\n match restarted!");
+            roomState = State.Ongoing;
+            //TODO: Broadcast restart match
+            GiveTurnTo(TurnOwner.Defender);
+
+        }
+
+        public void EndMatch()
+        {
+
+            Console.WriteLine("Room " + id + "\n match ended!");
+            roomState = State.Ended;
+            //TODO: Broadcast that match ended and redirect to menu screen
+
+        }
+
+        public void RemovePlayerFromRoom(Player player)
+        {
+
+            Console.WriteLine("Trying to remove player " + player.name + " from room " + id);
+            if (players.Remove(players.Find(p => p.id == player.id)))
+                Console.WriteLine("Player " + player.name + " left room " + id);
+            else
+                Console.WriteLine("Player " + player.name + " couldn't leave room " + id);
+
+            //Check if room is now empty, then remove it from rooms list.
+            if (players.Count == 0)
+            {
+
+                Console.WriteLine("Removing room because it's now empty.");
+                Methods.instance.rooms.Remove(this);
+
+            }
+
+            PrintRoomInfo();
+
+        }
+
+        public void PrintRoomInfo()
+        {
+
+            Console.WriteLine("Room ID: " + id);
+            Console.WriteLine("Room players (" + players.Count + "):");
+            foreach(Player player in players)
+                Console.WriteLine("     Player " + player.name);
+
+        }
+
+        public void BroadcastInRoom(string messageToBroadcast)
+        {
+
+            foreach(Player player in players)
+            {
+
+                try
+                {
+
+                    Server.SendMessageTCP(player, messageToBroadcast);
+
+                }
+                catch(Exception ex)
+                {
+
+                    Console.WriteLine("Couldn't broadcast room message to one player: " + player.name + ".\nException: " + ex);
+
+                }
+
+            }
+
+        }
+
+        public void BroadcastInRoomToOpponentsOnly(string messageToBroadcast, Player sender)
+        {
+
+            foreach (Player player in players)
+            {
+
+                try
+                {
+
+                    if (player == sender)
+                        continue;
+
+                    Server.SendMessageTCP(player, messageToBroadcast);
+
+                }
+                catch (Exception ex)
+                {
+
+                    Console.WriteLine("Couldn't broadcast room message to one player: " + player.name + ".\nException: " + ex);
+
+                }
+
+            }
+
+        }
+
 
     }
 
