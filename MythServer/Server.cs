@@ -228,7 +228,7 @@ namespace MythServer
                         string hex = BitConverter.ToString(bytes);
                         data = Encoding.ASCII.GetString(bytes);
 
-                        Console.WriteLine("Parsing UDP client response..");
+                        //Console.WriteLine("Parsing UDP client response..");
                         string[] messages = data.Split(new string[] { "$eof$" }, StringSplitOptions.None);
                         //Console.WriteLine("Client UDP Connection info: IP is " + udpRecvEndpoint.Address + ", port is: " + udpRecvEndpoint.Port);
 
@@ -264,14 +264,11 @@ namespace MythServer
                         {
 
                             foreach (Dictionary<string, object> request in requests)
+                            {
                                 try
                                 {
                                     
                                     Dictionary<string, object> dictToDequeue = clientRequestsQueue.Dequeue();
-
-                                    Console.WriteLine("Dequeuing dict with following values: ");
-                                    foreach(KeyValuePair<string, object> kvp in dictToDequeue)
-                                        Console.WriteLine("Key is: " + kvp.Key + " , value is: " + kvp.Value);
 
                                     Player player = methods.GetPlayerByID(request["playerid"].ToString());
                                     player.udpIPEndPoint.Port = udpRecvEndpoint.Port;
@@ -283,21 +280,22 @@ namespace MythServer
                                     try
                                     {
 
-                                        clientRequestsQueue.Dequeue(); //Delete corrupt/invalid request
-
                                         Console.WriteLine("Problem processing a client message or dequeuing message. \n" +
-                                            "request: " + request["type"].ToString() + " \n" +
-                                            "Exception: " + exo.Message);
+                                        "request: " + request["type"].ToString() + " \n" +
+                                        "Exception: " + exo.Message);
+
 
                                     }
                                     catch (Exception exo2)
                                     {
 
-                                        Console.WriteLine("Problem processing a client message, Probably message is corrupted from client side.");
+                                        Console.WriteLine("Problem processing a client message, Probably message is corrupted from client side.\n" + exo2);
 
                                     }
 
                                 }
+
+                            }
 
                         }
 
@@ -327,7 +325,7 @@ namespace MythServer
         public void ProcessClientMessage(Player player, Dictionary<string, object> clientMessage)
         {
 
-            Console.WriteLine("Processing client message with type " + clientMessage["type"]);
+            //Console.WriteLine("Processing client message with type " + clientMessage["type"]);
 
             Type thisType = methods.GetType();
             MethodInfo theMethod = thisType.GetMethod(clientMessage["type"].ToString());

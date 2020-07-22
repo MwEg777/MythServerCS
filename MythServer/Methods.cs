@@ -115,10 +115,10 @@ namespace MythServer
         public Player GetPlayerByID(string ID)
         {
 
-            Console.WriteLine("Players in list are: ");
+            //Console.WriteLine("Players in list are: ");
 
-            foreach(Player player in players)
-                Console.WriteLine("Player id: " + player.name);
+            // foreach(Player player in players)
+            //     Console.WriteLine("Player id: " + player.name);
 
             return players.Find(p => p.id == ID);
 
@@ -149,7 +149,7 @@ namespace MythServer
         public void UPDATE_INDICATOR(Player player, Dictionary<string, object> payload)
         {
 
-            player.room.BroadcastInRoom(JsonConvert.SerializeObject(payload));
+            player.room.BroadcastInRoomToOpponentsOnly(JsonConvert.SerializeObject(payload), player, false);
 
         }
 
@@ -234,12 +234,40 @@ namespace MythServer
 
         }
 
+        public void REQUEST_ROLE(Player player, Dictionary<string, object> payload)
+        {
+
+            Console.WriteLine("Player " + player.name + " asked for his role.");
+            foreach (KeyValuePair<Room.TurnOwner, Player> kvp in player.room.roles)
+                if (kvp.Value.Equals(player))
+                    Server.SendMessageTCP(kvp.Value, R_SETROLE(kvp.Key));
+
+        }
+
+        public void SEND_MY_INFO(Player player, Dictionary<string, object> payload)
+        {
+
+            Console.WriteLine("Player " + player.name + " just sent his info.");
+
+            player.room.BroadcastInRoomToOpponentsOnly(R_SETOPPONENTINFO(payload) , player, true);
+
+        }
+
+        public void SEND_MY_STATE(Player player, Dictionary<string, object> payload)
+        {
+
+            Console.WriteLine("Player " + player.name + " just sent his state.");
+
+            player.room.SetPlayerState(player, JsonConvert.DeserializeObject<Room.OpponentState>(payload["state"].ToString()));
+
+        }
+
         public void UDP_PULSE(Player player, Dictionary<string, object> payload)
         {
 
-            Console.WriteLine("Player " + player.name + " updated his UDP port to: " + player.udpIPEndPoint.Port);
+            //Console.WriteLine("Player " + player.name + " updated his UDP port to: " + player.udpIPEndPoint.Port);
 
-            Server.SendMessageUDP(player, R_HEY());
+            //Server.SendMessageUDP(player, R_HEY());
 
         }
 
@@ -253,7 +281,7 @@ namespace MythServer
 
             Dictionary<string, object> toConvert = new Dictionary<string, object>();
 
-            toConvert.Add("type", "heylol");
+            toConvert.Add("type", "Hey");
             
             return toConvert.ToJson();
 
@@ -283,17 +311,49 @@ namespace MythServer
 
         }
 
+        public static string R_SETOPPONENTINFO(Dictionary<string, object> payload)
+        {
+
+            Dictionary<string, object> toConvert = new Dictionary<string, object>();
+
+            toConvert.Add("type", "SET_OPPONENT_INFO");
+            toConvert.Add("name", payload["name"]);
+            toConvert.Add("id", payload["id"]);
+            //toConvert.Add("imagebase64", payload["imagebase64"]);
+
+            return toConvert.ToJson();
+
+        }
+
+        public static string R_SETOPPONENTSTATE(Room.OpponentState state)
+        {
+
+            Dictionary<string, object> toConvert = new Dictionary<string, object>();
+
+            toConvert.Add("type", "SET_OPPONENT_STATE");
+            toConvert.Add("opponentstate", JsonConvert.SerializeObject(state));
+
+            return toConvert.ToJson();
+
+        }
+
         public static string R_STARTGAME(Room room)
         {
 
             Dictionary<string, object> toConvert = new Dictionary<string, object>();
 
             toConvert.Add("type", "START_GAME");
-            for (int i=0; i<room.players.Count; i++)
-                toConvert.Add("opponentinfo" + i.ToString(), new OpponentInfo { name = room.players[i].name , id = room.players[i].id });
 
-            foreach (KeyValuePair<Room.TurnOwner, Player> kvp in room.roles)
-                Server.SendMessageTCP(kvp.Value, R_SETROLE(kvp.Key));
+            return toConvert.ToJson();
+
+        }
+
+        public static string R_RESTARTGAME(Room room)
+        {
+
+            Dictionary<string, object> toConvert = new Dictionary<string, object>();
+
+            toConvert.Add("type", "RESTART_GAME");
 
             return toConvert.ToJson();
 
@@ -417,13 +477,6 @@ namespace MythServer
 
     }
 
-    class OpponentInfo
-    {
-
-        public string name, id;
-
-    }
-
     class Player
     {
 
@@ -455,7 +508,7 @@ namespace MythServer
         public enum State { Matchmaking, Ongoing, Ended };
         public State roomState = State.Matchmaking;
         public List<Player> players = new List<Player>();
-        public int maxPlayers = 1;
+        public int maxPlayers = 2;
 
         #endregion
 
@@ -469,15 +522,82 @@ namespace MythServer
         public Dictionary<TurnOwner, Player> roles = new Dictionary<TurnOwner, Player>();
         public bool aBulletIsOut = false;
 
+        public enum OpponentState { None, Again, Left };
+        public Dictionary<Player, OpponentState> states = new Dictionary<Player, OpponentState>();
+
         #endregion
 
         public void AssignRoles()
         {
 
+            roles.Clear();
+
             //Assign first player as defender, second as attacker.
             //Random. Based on who connects first.
             roles.Add(TurnOwner.Defender, players[0]);
             roles.Add(TurnOwner.Attacker, players[1]);
+
+            states.Clear();
+            
+            foreach(Player player in players)
+                states.Add(player, OpponentState.None);
+
+        }
+
+        public void ExchangeRoles()
+        {
+
+            if (roles[TurnOwner.Attacker] == players[0])
+            {
+
+                roles[TurnOwner.Defender] = players[0];
+                roles[TurnOwner.Attacker] = players[1];
+
+            }
+            else
+            {
+
+                roles[TurnOwner.Attacker] = players[0];
+                roles[TurnOwner.Defender] = players[1];
+
+            }
+
+            states.Clear();
+
+            foreach(Player player in players)
+                states.Add(player, OpponentState.None);
+
+
+        }
+
+        public void SetPlayerState(Player player, OpponentState state)
+        {
+
+            try
+            {
+
+                states[player] = state;
+                BroadcastInRoomToOpponentsOnly(Methods.R_SETOPPONENTSTATE(state), player);
+
+                //Check if all want to play again
+                bool allAreReady = true;
+                foreach(KeyValuePair<Player, OpponentState> kvp in states)
+                    if (kvp.Value != OpponentState.Again)
+                    {
+                        allAreReady = false;
+                        break;
+                    }
+
+                if (allAreReady)
+                    RestartMatch();
+
+            }
+            catch(Exception ex)
+            {
+
+                Console.WriteLine("Couldn't set player state to " + state.ToString() + ". Exception: " + ex);
+
+            }
 
         }
 
@@ -632,6 +752,7 @@ namespace MythServer
 
             Console.WriteLine("Room " + id + "\n match started!");
             roomState = State.Ongoing;
+            AssignRoles();
             BroadcastInRoom(Methods.R_STARTGAME(this));
             GiveTurnTo(TurnOwner.Defender);
 
@@ -642,7 +763,8 @@ namespace MythServer
 
             Console.WriteLine("Room " + id + "\n match restarted!");
             roomState = State.Ongoing;
-            //TODO: Broadcast restart match
+            ExchangeRoles();
+            BroadcastInRoom(Methods.R_RESTARTGAME(this));
             GiveTurnTo(TurnOwner.Defender);
 
         }
@@ -658,6 +780,17 @@ namespace MythServer
 
         public void RemovePlayerFromRoom(Player player)
         {
+
+            try
+            {
+                SetPlayerState(player, Room.OpponentState.Left);
+            }
+            catch(Exception ex)
+            {
+
+                Console.WriteLine("Couldn't set player state while removing player from room. " + ex);
+
+            }
 
             Console.WriteLine("Trying to remove player " + player.name + " from room " + id);
             if (players.Remove(players.Find(p => p.id == player.id)))
@@ -688,7 +821,7 @@ namespace MythServer
 
         }
 
-        public void BroadcastInRoom(string messageToBroadcast)
+        public void BroadcastInRoom(string messageToBroadcast, bool tcp = true)
         {
 
             foreach(Player player in players)
@@ -697,13 +830,16 @@ namespace MythServer
                 try
                 {
 
-                    Server.SendMessageTCP(player, messageToBroadcast);
+                    if (tcp)
+                        Server.SendMessageTCP(player, messageToBroadcast);
+                    else
+                        Server.SendMessageUDP(player, messageToBroadcast);
 
                 }
                 catch(Exception ex)
                 {
 
-                    Console.WriteLine("Couldn't broadcast room message to one player: " + player.name + ".\nException: " + ex);
+                    Console.WriteLine("Couldn't broadcast room message using " + (tcp? "tcp" : "udp") + " to one player: " + player.name + ".\nException: " + ex);
 
                 }
 
@@ -711,7 +847,7 @@ namespace MythServer
 
         }
 
-        public void BroadcastInRoomToOpponentsOnly(string messageToBroadcast, Player sender)
+        public void BroadcastInRoomToOpponentsOnly(string messageToBroadcast, Player sender, bool tcp = true)
         {
 
             foreach (Player player in players)
@@ -723,7 +859,10 @@ namespace MythServer
                     if (player == sender)
                         continue;
 
-                    Server.SendMessageTCP(player, messageToBroadcast);
+                    if (tcp)
+                        Server.SendMessageTCP(player, messageToBroadcast);
+                    else
+                        Server.SendMessageUDP(player, messageToBroadcast);
 
                 }
                 catch (Exception ex)
